@@ -36,7 +36,7 @@ jobs:
       - name: Run pytest (unit tests)
         run: |
           # run only unit tests (files that do not require DB)
-          pytest -q tests/test_user_model.py tests/test_auth_unit.py --junitxml=pytest-report.xml
+          pytest -q tests/test_user_model_unit.py tests/test_auth_unit.py --junitxml=pytest-report.xml
 
       - name: Upload pytest report
         uses: actions/upload-artifact@v4
