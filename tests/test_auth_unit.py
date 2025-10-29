@@ -2,45 +2,69 @@
 import pytest
 import sys
 import os
-# ensure project root is on sys.path (optional but robust)
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-import user_model as um   # or import auth if file is auth.py (adjust accordingly)
 from unittest.mock import MagicMock
 
+# Ensure project root is on sys.path
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
+
+# Robust import for different project layouts
+try:
+    import user_model as um
+except ModuleNotFoundError:
+    try:
+        import ePIS.user_model as um  # if in a package folder
+    except Exception as exc:
+        raise ModuleNotFoundError("Could not import user_model. Place user_model.py in project root.") from exc
+
+
 def make_mock_conn_fetchone(return_val):
-    """Helper: return a connection whose cursor().fetchone() returns return_val"""
+    """Return a mock connection whose cursor() acts as a context manager and fetchone() returns return_val."""
     mock_cur = MagicMock()
-    mock_cur.__enter__.return_value = mock_cur
     mock_cur.fetchone.return_value = return_val
 
+    # context manager wrapper
+    cm = MagicMock()
+    cm.__enter__.return_value = mock_cur
+    cm.__exit__.return_value = False
+
     mock_conn = MagicMock()
-    mock_conn.cursor.return_value = mock_cur
+    mock_conn.cursor.return_value = cm
     return mock_conn, mock_cur
+
 
 def test_get_user_by_email_calls_cursor_correctly():
     expected = {"user_id": 1, "email": "test@example.com", "role": "doctor", "password_hash": "abc"}
     mock_conn, mock_cur = make_mock_conn_fetchone(expected)
 
-    # patch cursor to behave like context manager that returns dictionary rows
-    mock_cur.__enter__.return_value = mock_cur
-    mock_cur.fetchone.return_value = expected
-
     user = um.get_user_by_email(mock_conn, "test@example.com", "doctor")
-    # The function uses cursor(dictionary=True) so we check fetchone was called
+
     mock_conn.cursor.assert_called()
     mock_cur.execute.assert_called()
     assert user == expected
 
-def test_create_user_executes_insert(mocker):
+
+def test_create_user_executes_insert():
     # Use a real connection mock and inspect calls
     mock_conn = MagicMock()
     mock_cur = MagicMock()
-    mock_conn.cursor.return_value = mock_cur
 
-    # call create_user (it will call hash_password internally)
-    um.create_user(mock_conn, "Alice", "alice@example.com", "pass1", "patient", linked_cid="11111111111", linked_emp_id=None)
+    cm = MagicMock()
+    cm.__enter__.return_value = mock_cur
+    cm.__exit__.return_value = False
+    mock_conn.cursor.return_value = cm
 
-    # ensure SQL execution was attempted
+    um.create_user(
+        mock_conn,
+        "Alice",
+        "alice@example.com",
+        "pass1",
+        "patient",
+        linked_cid="11111111111",
+        linked_emp_id=None
+    )
+
     mock_conn.cursor.assert_called()
-    assert mock_cur.execute.called
-    assert mock_conn.commit.called
+    assert mock_cur.execute.called, "Expected cursor.execute to be called during create_user"
+    assert mock_conn.commit.called, "Expected connection.commit to be called during create_user"

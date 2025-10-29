@@ -1,36 +1,16 @@
-name: CI — pytest + MySQL
+name: CI — Unit Tests (pytest)
 
 on:
   push:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+  workflow_dispatch: {}   # allows manual runs from the Actions UI
 
 jobs:
-  test:
+  unit-tests:
+    name: Run unit tests
     runs-on: ubuntu-latest
-    services:
-      mysql:
-        image: mysql:8.0
-        env:
-          MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
-        ports:
-          - 3306:3306
-        # allow some time for DB to initialize
-        options: >-
-          --health-cmd="mysqladmin ping --silent"
-          --health-interval=5s
-          --health-timeout=5s
-          --health-retries=30
-
-    env:
-      # match the values used by tests/conftest.py (or read from .env.test)
-      TEST_DB_HOST: 127.0.0.1
-      TEST_DB_USER: root
-      TEST_DB_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
-      TEST_DB_NAME: final_epis_db_test
-      PYTHONWARNINGS: "ignore::DeprecationWarning"
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -48,60 +28,92 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pip-
 
-      - name: Install system packages (mysql client)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y default-mysql-client
-
-      - name: Install Python dependencies
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-          # make sure pytest is available
-          pip install pytest pytest-mock python-dotenv
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; else pip install pytest pytest-mock; fi
 
-      - name: Wait for MySQL to be ready
+      - name: Run pytest (unit tests)
         run: |
-          # Wait until mysql is accepting connections
-          for i in {1..30}; do
-            if mysql -h 127.0.0.1 -P 3306 -u root -p"${{ secrets.MYSQL_ROOT_PASSWORD }}" -e "select 1" &>/dev/null; then
-              echo "MySQL ready"
-              break
-            fi
-            echo "Waiting for MySQL... ($i)"
-            sleep 2
-          done
+          # run only unit tests (files that do not require DB)
+          pytest -q tests/test_user_model.py tests/test_auth_unit.py --junitxml=pytest-report.xml
 
-      - name: Create test database and import schema
-        run: |
-          # Create test DB
-          mysql -h 127.0.0.1 -P 3306 -u root -p"${{ secrets.MYSQL_ROOT_PASSWORD }}" -e "CREATE DATABASE IF NOT EXISTS ${TEST_DB_NAME};"
-          # Import schema file if exists (ensure final_epis_db.sql is in repo root)
-          if [ -f final_epis_db.sql ]; then
-            mysql -h 127.0.0.1 -P 3306 -u root -p"${{ secrets.MYSQL_ROOT_PASSWORD }}" ${TEST_DB_NAME} < final_epis_db.sql
-          else
-            echo "Schema file final_epis_db.sql not found in repo root. Skipping import."
-          fi
-
-      - name: Show Python and pip info (debug)
-        run: |
-          python -V
-          pip -V
-
-      - name: Run tests with pytest
-        env:
-          # ensure test processes use the test DB env variables
-          TEST_DB_HOST: ${{ env.TEST_DB_HOST }}
-          TEST_DB_USER: ${{ env.TEST_DB_USER }}
-          TEST_DB_PASSWORD: ${{ env.TEST_DB_PASSWORD }}
-          TEST_DB_NAME: ${{ env.TEST_DB_NAME }}
-        run: |
-          # Run pytest and produce junit xml so CI tools can read results
-          pytest -q --junitxml=pytest-report.xml || true
-          echo "pytest exit code captured (non-zero does not stop artifact upload step)"
-
-      - name: Upload pytest report (artifact)
+      - name: Upload pytest report
         uses: actions/upload-artifact@v4
         with:
           name: pytest-report
           path: pytest-report.xml
+
+# -----------------------------------------------------------------------------
+# Optional: integration-tests job template (disabled by default)
+# When you add real DB/integration tests, remove `if: false` or set a condition
+# (e.g. run only on manual dispatch) and ensure you add the secret
+# MYSQL_ROOT_PASSWORD in your repo Settings -> Secrets -> Actions.
+# -----------------------------------------------------------------------------
+  integration-tests:
+    if: ${{ false }}       # <-- change to a condition (or remove this line) to enable
+    name: Integration tests (MySQL)
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
+          MYSQL_DATABASE: final_epis_db_test
+        options: >-
+          --health-cmd="bash -c 'mysqladmin ping -h 127.0.0.1 -uroot -p${MYSQL_ROOT_PASSWORD} >/dev/null 2>&1 || exit 1'"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=60
+
+    env:
+      TEST_DB_HOST: 127.0.0.1
+      TEST_DB_USER: root
+      TEST_DB_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
+      TEST_DB_NAME: final_epis_db_test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install mysql client & Python deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y default-mysql-client
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          pip install pytest pytest-mock python-dotenv mysql-connector-python
+
+      - name: Wait for MySQL
+        run: |
+          for i in $(seq 1 60); do
+            echo "Attempt $i - checking mysql..."
+            if mysql -h 127.0.0.1 -P 3306 -u root -p"${{ secrets.MYSQL_ROOT_PASSWORD }}" -e "SELECT 1" >/dev/null 2>&1; then
+              echo "mysql ready"
+              break
+            fi
+            sleep 2
+          done
+
+      - name: Create test DB and import schema (if present)
+        run: |
+          mysql -h 127.0.0.1 -P 3306 -u root -p"${{ secrets.MYSQL_ROOT_PASSWORD }}" -e "CREATE DATABASE IF NOT EXISTS ${TEST_DB_NAME};"
+          if [ -f final_epis_db.sql ]; then
+            mysql -h 127.0.0.1 -P 3306 -u root -p"${{ secrets.MYSQL_ROOT_PASSWORD }}" ${TEST_DB_NAME} < final_epis_db.sql
+          else
+            echo "No final_epis_db.sql found; skip import"
+          fi
+
+      - name: Run pytest (integration)
+        run: |
+          pytest -q tests/integration_test_db.py --maxfail=1 --junitxml=pytest-integration-report.xml
+
+      - name: Upload pytest integration report
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-integration-report
+          path: pytest-integration-report.xml
