@@ -1,0 +1,56 @@
+# ----------------------
+# Python general ignores
+# ----------------------
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+*.egg
+build/
+dist/
+venv/
+.env
+.env.test
+.DS_Store
+*.log
+*.sqlite3
+.pytest_cache/
+.cache/
+.ipynb_checkpoints/
+reports/*.pdf
+reports/*.txt
+
+# ----------------------
+# Streamlit & local files
+# ----------------------
+.streamlit/
+*.db
+*.bak
+
+# ----------------------
+# VSCode / Editor files
+# ----------------------
+.vscode/
+.idea/
+*.code-workspace
+
+# ----------------------
+# OS system files
+# ----------------------
+Thumbs.db
+desktop.ini
+
+# ----------------------
+# Test and CI artifacts
+# ----------------------
+pytest-report.xml
+junit.xml
+coverage.xml
+htmlcov/
+*.cover
+.coverage
+coverage/
+test-results/
+artifacts/
